@@ -12,7 +12,7 @@ from .data import load_squad
 from .evaluate import by_question_type, run_benchmark
 from .metrics import mrr_at_k
 from .evaluate import rank_gold
-from .retrievers import BM25Retriever, LSARetriever, RRFHybrid, TfidfRetriever
+from .retrievers import BM25Retriever, LSARetriever, RRFHybrid, ScoreFusion, TfidfRetriever
 
 K1_GRID = (0.5, 0.9, 1.2, 1.5, 2.0)
 B_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
@@ -54,18 +54,29 @@ def bm25_grid(corpus, queries) -> pd.DataFrame:
     return grid
 
 
-LSA_WEIGHTS = (0.0, 0.1, 0.25, 0.5, 1.0)
+FUSION_WEIGHTS = (0.0, 0.1, 0.25, 0.5, 1.0)
 
 
-def rrf_weight_sweep(corpus, queries) -> pd.DataFrame:
-    """How much does adding LSA to BM25 (via RRF) help or hurt as its weight grows?"""
-    hybrid = RRFHybrid([BM25Retriever(), LSARetriever(n_components=256)])
-    hybrid.fit(corpus.texts)
+def fusion_sweep(corpus, queries) -> pd.DataFrame:
+    """BM25 plus LSA at growing LSA weight, fused by ranks (RRF) and by z-scored scores."""
+    bm25 = BM25Retriever()
+    lsa = LSARetriever(n_components=256)
+    rrf = RRFHybrid([bm25, lsa])
+    score_fusion = ScoreFusion([bm25, lsa])
+    rrf.fit(corpus.texts)  # fits the shared BM25 and LSA objects once
     rows = []
-    for weight in LSA_WEIGHTS:
-        hybrid.weights = [1.0, weight]
-        ranks, _ = rank_gold(hybrid, queries.texts, queries.gold)
-        rows.append({"LSA weight": weight, "Recall@1": float((ranks <= 1).mean()), "MRR@10": mrr_at_k(ranks, 10)})
+    for method, hybrid in (("RRF (ranks)", rrf), ("Score fusion (z-scores)", score_fusion)):
+        for weight in FUSION_WEIGHTS:
+            hybrid.weights = [1.0, weight]
+            ranks, _ = rank_gold(hybrid, queries.texts, queries.gold)
+            rows.append(
+                {
+                    "Fusion": method,
+                    "LSA weight": weight,
+                    "Recall@1": float((ranks <= 1).mean()),
+                    "MRR@10": mrr_at_k(ranks, 10),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -120,9 +131,9 @@ def main() -> None:
         print()
         print(grid.round(3).to_string())
 
-    sweep = rrf_weight_sweep(corpus, queries)
-    sweep.to_csv(args.out / "rrf_weight_sweep.csv", index=False)
-    (args.out / "rrf_weight_sweep.md").write_text(df_to_markdown(sweep) + "\n", encoding="utf-8")
+    sweep = fusion_sweep(corpus, queries)
+    sweep.to_csv(args.out / "fusion_sweep.csv", index=False)
+    (args.out / "fusion_sweep.md").write_text(df_to_markdown(sweep) + "\n", encoding="utf-8")
     print()
     print(df_to_markdown(sweep))
 

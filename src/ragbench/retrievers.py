@@ -115,6 +115,81 @@ class LSARetriever:
         return q @ self._docs.T
 
 
+def zscore_rows(scores: np.ndarray) -> np.ndarray:
+    """Standardise each query's scores across documents (mean 0, std 1)."""
+    centred = scores - scores.mean(axis=1, keepdims=True)
+    return centred / (scores.std(axis=1, keepdims=True) + 1e-12)
+
+
+class DenseRetriever:
+    """Cosine similarity between embeddings from any `encode(list[str]) -> np.ndarray` callable.
+
+    Embeddings are memoised by text, so refitting or re-scoring the same documents and
+    queries (for example, in a fusion-weight sweep) does not call the encoder again.
+    """
+
+    def __init__(self, encode, name: str = "Dense"):
+        self.encode = encode
+        self.name = name
+        self._cache: dict[str, np.ndarray] = {}
+
+    def _embed(self, texts: list[str]) -> np.ndarray:
+        missing = [t for t in dict.fromkeys(texts) if t not in self._cache]
+        if missing:
+            for text, vector in zip(missing, normalize(np.asarray(self.encode(missing), dtype=np.float64))):
+                self._cache[text] = vector
+        return np.stack([self._cache[t] for t in texts])
+
+    def fit(self, docs: list[str]) -> None:
+        self._docs = self._embed(docs)
+
+    def score(self, queries: list[str]) -> np.ndarray:
+        return self._embed(queries) @ self._docs.T
+
+
+class SentenceTransformerRetriever(DenseRetriever):
+    """DenseRetriever backed by a sentence-transformers model (pip install sentence-transformers)."""
+
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2", batch_size: int = 64):
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as error:
+            raise ImportError(
+                "SentenceTransformerRetriever needs the optional dependency: pip install sentence-transformers"
+            ) from error
+        model = SentenceTransformer(model_name)
+
+        def encode(texts: list[str]) -> np.ndarray:
+            return model.encode(texts, batch_size=batch_size, show_progress_bar=False, convert_to_numpy=True)
+
+        super().__init__(encode, name=model_name.split("/")[-1])
+
+
+class ScoreFusion:
+    """Weighted sum of per-query z-scored retriever scores.
+
+    Unlike rank fusion, this keeps how far apart documents are in each retriever's own scores.
+    """
+
+    def __init__(self, retrievers: list, weights: list[float] | None = None, name: str | None = None):
+        self.retrievers = retrievers
+        self.weights = list(weights) if weights is not None else [1.0] * len(retrievers)
+        if len(self.weights) != len(retrievers):
+            raise ValueError("weights must have one entry per retriever")
+        self.name = name or "Score fusion (" + " + ".join(r.name for r in retrievers) + ")"
+
+    def fit(self, docs: list[str]) -> None:
+        for retriever in self.retrievers:
+            retriever.fit(docs)
+
+    def score(self, queries: list[str]) -> np.ndarray:
+        total = None
+        for retriever, weight in zip(self.retrievers, self.weights):
+            contribution = weight * zscore_rows(retriever.score(queries))
+            total = contribution if total is None else total + contribution
+        return total
+
+
 class RRFHybrid:
     """Reciprocal Rank Fusion: score(d) = sum_r w_r / (k + rank_r(d)). Weights default to 1."""
 
