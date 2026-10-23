@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ragbench"
+version = "0.1.0"
+description = "A small, reproducible benchmark for first-stage RAG retrieval (BM25, TF-IDF, LSA, RRF hybrid) on SQuAD."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.1",
+    "scikit-learn>=1.4",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
