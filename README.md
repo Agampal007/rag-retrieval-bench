@@ -1,5 +1,7 @@
 # rag-retrieval-bench
 
+[![CI](https://github.com/Agampal007/rag-retrieval-bench/actions/workflows/ci.yml/badge.svg)](https://github.com/Agampal007/rag-retrieval-bench/actions/workflows/ci.yml)
+
 A small, reproducible benchmark for the **retrieval step of a RAG pipeline**. It measures how often a retriever puts the paragraph containing the answer in the top-k results, using the 10,570 questions and 2,067 paragraphs of the SQuAD v1.1 dev set.
 
 It compares five retrievers behind one two-method interface (`fit`, `score`), all implemented from scratch on NumPy/SciPy/scikit-learn, with no model downloads and no API keys:
