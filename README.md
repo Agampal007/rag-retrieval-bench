@@ -65,13 +65,37 @@ To reproduce:
 pip install -e ".[dense]"
 python scripts/download_data.py  # once, if data/ is missing
 python scripts/run_dense.py     # downloads all-MiniLM-L6-v2 (about 90 MB)
+python scripts/run_heldout_fusion.py  # fusion weight chosen on held-out articles
 ```
+
+### Choosing the weight on held-out questions
+
+The sweep above reports its best weight on the same questions it was chosen on. To check that the
+gain is real, `scripts/run_heldout_fusion.py` splits the questions by Wikipedia article: the weight
+is chosen by MRR@10 on 24 articles (5,364 questions) and everything below is measured on the other
+24 (5,206 questions). Full output: `results/heldout_fusion.md`.
+
+| Retriever (test split) | Recall@1 | Recall@3 | Recall@10 | MRR@10 | nDCG@10 |
+| --- | --- | --- | --- | --- | --- |
+| BM25 alone | 0.740 | 0.876 | 0.939 | 0.815 | 0.845 |
+| all-MiniLM-L6-v2 alone | 0.618 | 0.805 | 0.918 | 0.723 | 0.770 |
+| Fusion, equal weights (x1) | 0.775 | 0.910 | 0.963 | 0.847 | 0.876 |
+| **Fusion, weight chosen on the tune split (x2)** | **0.785** | **0.920** | **0.971** | **0.857** | **0.885** |
+| Fusion, best weight on the test split (x3, optimistic) | 0.784 | 0.921 | 0.973 | 0.857 | 0.886 |
+
+- **The fusion gain holds on unseen articles.** With the weight chosen on other articles, fusion
+  lifts MRR@10 from 0.815 to 0.857 and Recall@1 from 0.740 to 0.785 over BM25.
+- **Tuning the weight cost almost nothing in optimism.** The weight picked on the tune split (x2)
+  scores within 0.001 of the best weight picked on the test split itself.
+- **The best weight is found.** MRR@10 on both splits peaks at a dense weight of 2-3 and falls
+  after that: 0.857 at x2, 0.847 at x6 and 0.804 at x16 on the test split. The original sweep
+  stopped at x2 while still improving, so it had not yet reached that peak.
 
 ## Read this before quoting the numbers
 
 - **The corpus is small and the questions are easy for lexical search.** SQuAD annotators wrote each question while looking at its paragraph, so questions share many words with their answer paragraph. These scores are not comparable to BEIR or MS MARCO, and they say little about how BM25 would do on a large, noisy corpus.
 - **LSA is not a neural dense retriever.** It is a cheap latent-semantic baseline. The neural model is evaluated separately in the next section.
-- **The dense experiment uses one model on one dataset.** The fusion weight sweep stopped at a dense weight of 2 while results were still improving, so the best weight was not found, and weights were not chosen on held-out data. The `ms/query` column in `results/dense_all-MiniLM-L6-v2.md` (measured on my own PC) is not comparable across rows: after the dense row, query embeddings are cached, so the fusion rows leave out encoding time.
+- **The dense experiment uses one model on one dataset.** The fusion weight sweep in the first dense table stopped at a dense weight of 2 and was not chosen on held-out data; the held-out experiment above fixes both, but it still uses one model on one dataset. The `ms/query` column in `results/dense_all-MiniLM-L6-v2.md` (measured on my own PC) is not comparable across rows: after the dense row, query embeddings are cached, so the fusion rows leave out encoding time.
 - **The k1/b grid and the fusion-weight sweeps are evaluated on the same questions as the headline table.** Treat the best cells as optimistic. The headline BM25 row uses the default parameters, not the tuned ones.
 - **Ties are scored pessimistically.** If the gold paragraph ties with other paragraphs (for example, all-zero scores), it is ranked below all of them.
 - **One gold paragraph per question.** A different paragraph that also answers the question is counted as a miss.
@@ -86,7 +110,7 @@ python scripts/download_data.py      # SQuAD v1.1 dev, checksum-verified
 python -m ragbench.run               # tables, CSVs and ranks in ./results
 python -m ragbench.plots             # figures in ./results
 python scripts/miss_analysis.py      # BM25 failure breakdown
-pytest                               # 21 unit tests
+pytest                               # 25 unit tests
 ```
 
 `python -m ragbench.run --limit 500 --skip-grid` gives a quick sanity run. All numbers are deterministic (fixed seeds, fixed dataset checksum).
@@ -108,18 +132,19 @@ src/ragbench/
   data.py        SQuAD loader, question-type tagging
   retrievers.py  TF-IDF, BM25, LSA, dense, RRF and score fusion behind fit()/score()
   dense_experiment.py  BM25 vs dense vs fusion for any embedding function
+  heldout.py     split by article, fusion ranks per weight, weight selection
   metrics.py     rank-based Recall@k, MRR@k, nDCG@k
   evaluate.py    benchmark loop, per-question-type breakdown
   run.py         CLI: all tables and CSVs
   plots.py       figures
-scripts/         dataset download, BM25 miss analysis, sentence-transformers experiment
-tests/           21 unit tests (metrics, retrievers, fusion, dense, data loader)
+scripts/         dataset download, BM25 miss analysis, dense and held-out fusion experiments
+tests/           25 unit tests (metrics, retrievers, fusion, dense, held-out split, data loader)
 results/         committed outputs from the run described above
 ```
 
 ## Roadmap
 
-- Choose the fusion weight on a held-out split (the sweep was still improving at dense x2) and try stronger embedding models.
+- ~~Choose the fusion weight on a held-out split~~ (done: x2, see above). Try stronger embedding models.
 - Add a cross-encoder reranker on the top 20 and measure the lift on the "right article, wrong paragraph" misses.
 - Chunk-size ablation: sentence windows aggregated to paragraph scores.
 - Run the same harness on a larger corpus (for example a BEIR dataset) to see whether the ranking of retrievers holds.
